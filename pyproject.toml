@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mlgroom"
+version = "0.0.1"
+description = "Groom machine learning job queues."
+authors = [
+  { name="Peter Schneider-Kamp", email="petersk@imada.sdu.dk" }
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+  "click",
+  "pyaml",
+]
+
+[project.scripts]
+mlg-slurm = "mlgroom.slurm:groom"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["mlgroom"]
+
+[tool.hatch.build]
+include = [
+  "mlgroom/**/*.py"
+]
+
