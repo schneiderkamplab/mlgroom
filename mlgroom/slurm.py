@@ -79,7 +79,7 @@ def log_message(log_file, level, message):
     with open(log_file, "a") as f:
         f.write(f"[{timestamp}] {level.upper()} {message}\n")
 
-def update_completed_failed_jobs(jobs, completed_jobs, failed_jobs, log_file=None):
+def update_completed_failed_jobs(jobs, completed_jobs, failed_jobs, log_file=None, cleanup_job_ids=False):
     for job in jobs:
         new_completed = set()
         new_failed = set()
@@ -107,6 +107,20 @@ def update_completed_failed_jobs(jobs, completed_jobs, failed_jobs, log_file=Non
             log_message(log_file, "info", f"Marked chunks as failed for {job['name']}: {format_ranges(new_failed)}")
         job["completed"] = format_ranges(updated_completed)
         job["failed"] = format_ranges(updated_failed)
+        if cleanup_job_ids:
+            completed_set = set(updated_completed)
+            to_delete = []
+            for chunk in job_ids:
+                if "-" in chunk:
+                    start, end = map(int, chunk.split("-"))
+                    task_ids = set(range(start, end + 1))
+                else:
+                    task_ids = {int(chunk)}
+                if task_ids.issubset(completed_set):
+                    to_delete.append(chunk)
+            for chunk in to_delete:
+                del job_ids[chunk]
+                log_message(log_file, "info", f"Removed completed job ID mapping for chunk {chunk} in job {job['name']}")
 
 def submit_array(script_path, name, start, end, dry_run=False, log_file=None):
     array_spec = f"--array={start}-{end}"
@@ -137,10 +151,11 @@ def submit_array(script_path, name, start, end, dry_run=False, log_file=None):
 
 @click.command()
 @click.option("--queue-file", default="groom.yml", type=click.Path(exists=True), help="Queue file to groom (default: groom.yml)")
-@click.option("--user", default=None, help="Username for SLURM squeue/sacct")
-@click.option("--dry-run", is_flag=True, help="Do not submit jobs, only print what would happen")
+@click.option("--user", default=None, help="Username for SLURM squeue/sacct commands (default: current user)")
+@click.option("--dry-run", is_flag=True, help="Do not submit jobs, only print what would happen (default: False)")
 @click.option("--log-file", default="groom.log", type=click.Path(), help="Log file to append job activity to (default: groom.log)")
-def groom(queue_file, user, dry_run, log_file):
+@click.option("--cleanup-job-ids", is_flag=True, help="Remove job IDs for completed jobs from the YAML file (default: False)")
+def groom(queue_file, user, dry_run, log_file, cleanup_job_ids):
     path = Path(queue_file)
     with open(path) as f:
         data = yaml.safe_load(f)
@@ -160,7 +175,7 @@ def groom(queue_file, user, dry_run, log_file):
         return
 
     completed_ids, failed_ids = get_completed_failed_job_ids()
-    update_completed_failed_jobs(data["jobs"], completed_ids, failed_ids, log_file=log_file)
+    update_completed_failed_jobs(data["jobs"], completed_ids, failed_ids, log_file=log_file, cleanup_job_ids=cleanup_job_ids)
 
     for job in data["jobs"]:
         name = job["name"]
