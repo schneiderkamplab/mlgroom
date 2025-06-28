@@ -153,15 +153,9 @@ def submit_array(script_path, name, start, end, dry_run=False, log_file=None):
         return False, None
 
 def chunk_task_ids(task_ids, chunk_size):
-    """
-    Given a sorted list of task IDs (assumed contiguous),
-    return list of (start, end) chunks of at most chunk_size length.
-    """
     if not task_ids:
         return []
-
     chunks = []
-    start = task_ids[0]
     for i in range(0, len(task_ids), chunk_size):
         chunk_start = task_ids[i]
         chunk_end = task_ids[min(i + chunk_size - 1, len(task_ids) - 1)]
@@ -189,22 +183,18 @@ def groom(queue_file, user, dry_run, log_file, cleanup_job_ids, chunk_size, max_
     else:
         click.echo("[ERROR] Queue file does not exist.")
         return
-
     user = user or subprocess.getoutput("whoami")
     chunk_size = data["chunk_size"] if chunk_size is None else chunk_size
     max_jobs = data["max_jobs"] if max_jobs is None else max_jobs
     current_jobs = get_total_jobs(user)
     remaining_slots = max_jobs - current_jobs
-
     if remaining_slots <= 0:
         msg = f"No slots available ({current_jobs}/{max_jobs} jobs running)."
         click.echo(f"[INFO] {msg}")
         log_message(log_file, "info", msg)
         return
-
     completed_ids, failed_ids = get_completed_failed_job_ids()
     update_completed_failed_jobs(data["jobs"], completed_ids, failed_ids, log_file=log_file, cleanup_job_ids=cleanup_job_ids)
-
     for job in data["jobs"]:
         name = job["name"]
         task_ids = sorted(parse_ranges(job.get("range", [])))
@@ -216,10 +206,8 @@ def groom(queue_file, user, dry_run, log_file, cleanup_job_ids, chunk_size, max_
         failed = parse_ranges(job.get("failed", []))
         job.setdefault("job_ids", {})
         handled = submitted.union(completed).union(failed)
-
         remaining = sorted(set(task_ids) - handled)
         available_chunks = chunk_task_ids(remaining, chunk_size)
-
         for start, end in available_chunks:
             size = end - start + 1
             if size > remaining_slots:
@@ -234,7 +222,6 @@ def groom(queue_file, user, dry_run, log_file, cleanup_job_ids, chunk_size, max_
                 break
         submitted = parse_ranges(job.get("submitted", []))
         job["submitted"] = format_ranges(submitted)
-
     if not dry_run:
         if data != original_data:
             with open(path, "w") as f:
@@ -250,16 +237,86 @@ def groom(queue_file, user, dry_run, log_file, cleanup_job_ids, chunk_size, max_
         log_message(log_file, "info", "Dry-run: nothing written to disk.")
 
 @cli.command()
-@click.argument("job")
-def resubmit(job):
-    click.echo(f"Resubmit logic for failed chunks of job '{job}' would go here.")
+@click.option("--job", default=None, help="Job name to resubmit (default: all jobs with failed tasks)")
+@click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to modify (default: groom.yml)")
+@click.option("--log-file", default="groom.log", type=click.Path(), help="Log file to write to (default: groom.log)")
+@click.option("--dry-run", is_flag=True, help="Show what would change but do not write to file (default: False)")
+def resubmit(job, queue_file, log_file, dry_run):
+    path = Path(queue_file)
+    if not path.exists():
+        click.echo("[ERROR] Queue file does not exist.")
+        return
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    jobs = data.get("jobs", [])
+    if job:
+        jobs = [j for j in jobs if j["name"] == job]
+        if not jobs:
+            click.echo(f"[ERROR] Job '{job}' not found in queue.")
+            return
+    modified = False
+    for j in jobs:
+        name = j["name"]
+        failed_tasks = sorted(parse_ranges(j.get("failed", [])))
+        if not failed_tasks:
+            click.echo(f"[INFO] No failed tasks to clean for job '{name}'.")
+            continue
+        submitted_chunks = j.get("submitted", [])
+        updated_submitted = []
+        updated_job_ids = j.get("job_ids", {}).copy()
+        resubmit_counts = j.get("resubmit_counts", {}).copy()
+        cleaned = False
+        for chunk_str in submitted_chunks:
+            if "-" in chunk_str:
+                start, end = map(int, chunk_str.split("-"))
+                chunk_tasks = list(range(start, end + 1))
+            else:
+                chunk_tasks = [int(chunk_str)]
+            failed_in_chunk = sorted(set(chunk_tasks) & set(failed_tasks))
+            if not failed_in_chunk:
+                updated_submitted.append(chunk_str)
+                continue
+            msg = f"[CLEANUP] {name}: removing chunk '{chunk_str}' due to failed tasks: {format_ranges(failed_in_chunk)}"
+            click.echo(msg)
+            log_message(log_file, "info", msg)
+            updated_job_ids.pop(chunk_str, None)
+            cleaned = True
+            resubmit_counts[chunk_str] = resubmit_counts.get(chunk_str, 0) + 1
+            remaining_tasks = sorted(set(chunk_tasks) - set(failed_in_chunk))
+            for start, end in chunk_task_ids(remaining_tasks, size=len(chunk_tasks)):
+                new_chunk = f"{start}-{end}" if start != end else str(start)
+                updated_submitted.append(new_chunk)
+                # Remove old job_id if carried over by accident
+                updated_job_ids.pop(new_chunk, None)
+        if cleaned:
+            j["submitted"] = format_ranges(parse_ranges(updated_submitted))
+            j["job_ids"] = {k: v for k, v in updated_job_ids.items() if v is not None}
+            j["resubmit_counts"] = resubmit_counts
+            j["failed"] = []
+            modified = True
+            click.echo(f"[OK] {name}: cleaned failed tasks and updated resubmit counts.")
+        else:
+            click.echo(f"[INFO] {name}: no affected chunks found.")
+    if modified:
+        if dry_run:
+            click.echo("[DRY-RUN] No changes written to file. Proposed YAML output:")
+            yaml.safe_dump(data, sys.stdout)
+            log_message(log_file, "info", f"Dry-run: resubmit changes shown for queue '{queue_file}'")
+        else:
+            with open(path, "w") as f:
+                yaml.safe_dump(data, f)
+            click.echo("[DONE] Queue file updated.")
+            log_message(log_file, "info", f"Resubmit cleanup written to '{queue_file}'")
+    else:
+        click.echo("[OK] No changes made to queue.")
 
 @cli.command()
 @click.argument("job_definition")
 @click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to write to (default: groom.yml)")
 @click.option("--chunk-size", type=int, default=10, help="Chunk size for array jobs (default: 10)")
 @click.option("--max-jobs", type=int, default=200, help="Max total running jobs (default: 200)")
-def append(job_definition, queue_file, chunk_size, max_jobs):
+@click.option("--dry-run", is_flag=True, help="Only show what would be added without writing to disk")
+def append(job_definition, queue_file, chunk_size, max_jobs, dry_run):
     path = Path(queue_file)
     if path.exists():
         with open(path) as f:
@@ -290,6 +347,10 @@ def append(job_definition, queue_file, chunk_size, max_jobs):
     data.setdefault("jobs", []).append(job_entry)
     data.setdefault("chunk_size", chunk_size)
     data.setdefault("max_jobs", max_jobs)
-    with open(path, "w") as f:
+    if dry_run:
+        click.echo("[DRY-RUN] No changes written to disk. Proposed YAML:")
         yaml.safe_dump(data, sys.stdout)
-    click.echo(f"[OK] Appended job '{name}' with tasks: {format_ranges(range_parsed)}")
+    else:
+        with open(path, "w") as f:
+            yaml.safe_dump(data, f)
+        click.echo(f"[OK] Appended job '{name}' with tasks: {format_ranges(range_parsed)}")
