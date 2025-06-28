@@ -270,12 +270,12 @@ def groom(queue_file, user, submit, log_file, cleanup_job_ids, chunk_size, max_j
             fromfile="original",
             tofile="modified"
         )
+        diff = "".join(diff)
         if not diff:
             click.echo("[OK] No changes to YAML.")
             log_message(log_file, "info", "No changes to YAML.")
         else:
-            click.echo_via_pager("".join(diff))
-            print(diff)
+            click.echo_via_pager(diff)
         log_message(log_file, "info", "Dry-run: nothing submitted and nothing written to disk.")
 
 @cli.command()
