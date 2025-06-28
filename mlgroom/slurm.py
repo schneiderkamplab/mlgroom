@@ -43,18 +43,19 @@ def get_total_jobs(user):
             count += 1
     return count
 
-def get_completed_job_ids():
-    """Return a dict of job_id -> state for jobs in terminal states."""
+def get_completed_failed_job_ids():
+    """Return a dict of completed/failed job id -> state"""
     cmd = ["sacct", "--format=JobID,State", "--parsable2", "--noheader", "--starttime=now-7days"]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
     completed = {}
+    failed = {}
     for line in result.stdout.strip().split("\n"):
-        parts = line.strip().split("|")
-        if len(parts) == 2:
-            jobid, state = parts
-            if re.match(r'COMPLETED|FAILED|CANCELLED|TIMEOUT|OUT_OF_MEMORY', state):
-                completed[jobid.split('.')[0]] = state
-    return completed
+        jobid, state = line.strip().split("|")
+        if jobid.endswith(".batch") and state == "COMPLETED":
+            completed[jobid] = state
+        if jobid.endswith(".batch") and state in {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY"}:
+            failed[jobid] = state
+    return completed, failed
 
 def format_ranges(numbers):
     if not numbers:
@@ -78,23 +79,34 @@ def log_message(log_file, level, message):
     with open(log_file, "a") as f:
         f.write(f"[{timestamp}] {level.upper()} {message}\n")
 
-def update_completed_jobs(jobs, completed_jobs, log_file=None):
+def update_completed_failed_jobs(jobs, completed_jobs, failed_jobs, log_file=None):
     for job in jobs:
         new_completed = set()
+        new_failed = set()
         job_ids = job.get("job_ids", {})
         for chunk, jid in job_ids.items():
-            if str(jid) in completed_jobs:
-                # e.g. chunk = "1-10"
-                if "-" in chunk:
-                    start, end = map(int, chunk.split("-"))
-                    new_completed.update(range(start, end + 1))
-                else:
-                    new_completed.add(int(chunk))
-        current = parse_ranges(job.get("completed", []))
-        updated = sorted(current.union(new_completed))
+            task_ids = []
+            if "-" 	in chunk:
+                start, end = map(int, chunk.split("-"))
+                task_ids = range(start, end + 1)
+            else:
+                task_ids = [int(chunk)]
+            for task_id in task_ids:
+                step_id = f"{jid}_{task_id}.batch"
+                if step_id in completed_jobs:
+                    new_completed.add(task_id)
+                if step_id in failed_jobs:
+                    new_failed.add(task_id)
+        current_completed = parse_ranges(job.get("completed", []))
+        current_failed = parse_ranges(job.get("failed", []))
+        updated_completed = sorted(current_completed.union(new_completed))
+        updated_failed = sorted(current_failed.union(new_failed))
         if new_completed:
             log_message(log_file, "info", f"Marked chunks as completed for {job['name']}: {format_ranges(new_completed)}")
-        job["completed"] = format_ranges(updated)
+        if new_failed:
+            log_message(log_file, "info", f"Marked chunks as failed for {job['name']}: {format_ranges(new_failed)}")
+        job["completed"] = format_ranges(updated_completed)
+        job["failed"] = format_ranges(updated_failed)
 
 def submit_array(script_path, name, start, end, dry_run=False, log_file=None):
     array_spec = f"--array={start}-{end}"
@@ -147,16 +159,17 @@ def groom(queue_file, user, dry_run, log_file):
         log_message(log_file, "info", msg)
         return
 
-    completed_ids = get_completed_job_ids()
-    update_completed_jobs(data["jobs"], completed_ids, log_file=log_file)
+    completed_ids, failed_ids = get_completed_failed_job_ids()
+    update_completed_failed_jobs(data["jobs"], completed_ids, failed_ids, log_file=log_file)
 
     for job in data["jobs"]:
         name = job["name"]
         total = job["total"]
         submitted = parse_ranges(job.get("submitted", []))
         completed = parse_ranges(job.get("completed", []))
+        failed = parse_ranges(job.get("failed", []))
         job.setdefault("job_ids", {})
-        handled = submitted.union(completed)
+        handled = submitted.union(completed).union(failed)
 
         all_chunks = chunkify(1, total, chunk_size)
         available_chunks = [
@@ -176,6 +189,8 @@ def groom(queue_file, user, dry_run, log_file):
                 remaining_slots -= size
             if remaining_slots <= 0:
                 break
+        submitted = parse_ranges(job.get("submitted", []))
+        job["submitted"] = format_ranges(submitted)
 
     if not dry_run:
         if data != original_data:
@@ -187,4 +202,5 @@ def groom(queue_file, user, dry_run, log_file):
             log_message(log_file, "info", "No updates.")
     else:
         click.echo("[DRY-RUN] YAML not written to disk.")
+        print(data)
         log_message(log_file, "info", "Dry-run: nothing written to disk.")
