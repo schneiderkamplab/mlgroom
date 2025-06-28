@@ -13,6 +13,8 @@ def parse_ranges(ranges):
         elif '-' in str(r):
             start, end = map(int, str(r).split('-'))
             result.update(range(start, end + 1))
+        else:
+            result.add(int(r))
     return result
 
 def chunkify(start, end, size):
@@ -44,7 +46,6 @@ def get_total_jobs(user):
     return count
 
 def get_completed_failed_job_ids():
-    """Return a dict of completed/failed job id -> state"""
     cmd = ["sacct", "--format=JobID,State", "--parsable2", "--noheader", "--starttime=now-7days"]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
     completed = {}
@@ -86,7 +87,7 @@ def update_completed_failed_jobs(jobs, completed_jobs, failed_jobs, log_file=Non
         job_ids = job.get("job_ids", {})
         for chunk, jid in job_ids.items():
             task_ids = []
-            if "-" 	in chunk:
+            if "-" in chunk:
                 start, end = map(int, chunk.split("-"))
                 task_ids = range(start, end + 1)
             else:
@@ -149,22 +150,31 @@ def submit_array(script_path, name, start, end, dry_run=False, log_file=None):
         log_message(log_file, "warn", msg)
         return False, None
 
-@click.command()
-@click.option("--queue-file", default="groom.yml", type=click.Path(exists=True), help="Queue file to groom (default: groom.yml)")
+@click.group()
+def cli():
+    pass
+
+@cli.command()
+@click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to groom (default: groom.yml)")
 @click.option("--user", default=None, help="Username for SLURM squeue/sacct commands (default: current user)")
 @click.option("--dry-run", is_flag=True, help="Do not submit jobs, only print what would happen (default: False)")
 @click.option("--log-file", default="groom.log", type=click.Path(), help="Log file to append job activity to (default: groom.log)")
 @click.option("--cleanup-job-ids", is_flag=True, help="Remove job IDs for completed jobs from the YAML file (default: False)")
-def groom(queue_file, user, dry_run, log_file, cleanup_job_ids):
+@click.option("--chunk-size", type=int, default=10, help="Chunk size for array jobs (default: 10)")
+@click.option("--max-jobs", type=int, default=200, help="Max total running jobs (default: 200)")
+def groom(queue_file, user, dry_run, log_file, cleanup_job_ids, chunk_size, max_jobs):
     path = Path(queue_file)
-    with open(path) as f:
-        data = yaml.safe_load(f)
-    with open(path) as f:
-        original_data = yaml.safe_load(f)
+    if path.exists():
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        original_data = copy.deepcopy(data)
+    else:
+        click.echo("[ERROR] Queue file does not exist.")
+        return
 
     user = user or subprocess.getoutput("whoami")
-    chunk_size = data.get("chunk_size", 10)
-    max_jobs = data.get("max_jobs", 200)
+    chunk_size = data.get("chunk_size", chunk_size)
+    max_jobs = data.get("max_jobs", max_jobs)
     current_jobs = get_total_jobs(user)
     remaining_slots = max_jobs - current_jobs
 
@@ -179,14 +189,30 @@ def groom(queue_file, user, dry_run, log_file, cleanup_job_ids):
 
     for job in data["jobs"]:
         name = job["name"]
-        total = job["total"]
+        task_ids = sorted(parse_ranges(job.get("range", [])))
+        if not task_ids:
+            click.echo(f"[WARN] Skipping job '{name}' due to empty range.")
+            continue
         submitted = parse_ranges(job.get("submitted", []))
         completed = parse_ranges(job.get("completed", []))
         failed = parse_ranges(job.get("failed", []))
         job.setdefault("job_ids", {})
         handled = submitted.union(completed).union(failed)
 
-        all_chunks = chunkify(1, total, chunk_size)
+        all_chunks = []
+        curr_range = []
+        prev = None
+        for tid in task_ids:
+            if prev is None or tid == prev + 1:
+                curr_range.append(tid)
+            else:
+                if curr_range:
+                    all_chunks.extend(chunkify(curr_range[0], curr_range[-1], chunk_size))
+                curr_range = [tid]
+            prev = tid
+        if curr_range:
+            all_chunks.extend(chunkify(curr_range[0], curr_range[-1], chunk_size))
+
         available_chunks = [
             (start, end) for start, end in all_chunks
             if set(range(start, end + 1)).isdisjoint(handled)
@@ -214,8 +240,54 @@ def groom(queue_file, user, dry_run, log_file, cleanup_job_ids):
             click.echo("[DONE] YAML updated.")
             log_message(log_file, "info", "YAML updated and written to disk.")
         else:
+            click.echo("[OK] No changes to write.")
             log_message(log_file, "info", "No updates.")
     else:
         click.echo("[DRY-RUN] YAML not written to disk.")
         print(data)
         log_message(log_file, "info", "Dry-run: nothing written to disk.")
+
+@cli.command()
+@click.argument("job")
+def resubmit(job):
+    click.echo(f"Resubmit logic for failed chunks of job '{job}' would go here.")
+
+@cli.command()
+@click.argument("job_definition")
+@click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to write to (default: groom.yml)")
+@click.option("--chunk-size", type=int, default=10, help="Chunk size for array jobs (default: 10)")
+@click.option("--max-jobs", type=int, default=200, help="Max total running jobs (default: 200)")
+def append(job_definition, queue_file, chunk_size, max_jobs):
+    path = Path(queue_file)
+    if path.exists():
+        with open(path) as f:
+            data = yaml.safe_load(f)
+    else:
+        data = {"jobs": []}
+
+    parts = job_definition.split(":")
+    if len(parts) != 2:
+        raise click.UsageError("append must be in the format 'script:range'")
+    script_path = Path(parts[0])
+    if not script_path.exists():
+        raise click.BadParameter(f"Script file does not exist: {script_path}")
+    name = script_path.stem
+    range_input = parts[1].split(",")
+    range_parsed = sorted(parse_ranges(range_input))
+    if not range_parsed:
+        raise click.BadParameter("Empty or invalid task range.")
+    job_entry = {
+        "name": name,
+        "script": str(script_path),
+        "range": format_ranges(range_parsed),
+        "submitted": [],
+        "completed": [],
+        "failed": [],
+        "job_ids": {},
+    }
+    data.setdefault("jobs", []).append(job_entry)
+    data.setdefault("chunk_size", chunk_size)
+    data.setdefault("max_jobs", max_jobs)
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f)
+    click.echo(f"[OK] Appended job '{name}' with tasks: {format_ranges(range_parsed)}")
