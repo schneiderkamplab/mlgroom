@@ -178,8 +178,8 @@ def cli():
 @click.option("--dry-run", is_flag=True, help="Do not submit jobs, only print what would happen (default: False)")
 @click.option("--log-file", default="groom.log", type=click.Path(), help="Log file to append job activity to (default: groom.log)")
 @click.option("--cleanup-job-ids", is_flag=True, help="Remove job IDs for completed jobs from the YAML file (default: False)")
-@click.option("--chunk-size", type=int, default=10, help="Chunk size for array jobs (default: 10)")
-@click.option("--max-jobs", type=int, default=200, help="Max total running jobs (default: 200)")
+@click.option("--chunk-size", type=int, default=None, help="Chunk size for array jobs (default: read from YAML)")
+@click.option("--max-jobs", type=int, default=None, help="Max total running jobs (default: read from YAML)")
 def groom(queue_file, user, dry_run, log_file, cleanup_job_ids, chunk_size, max_jobs):
     path = Path(queue_file)
     if path.exists():
@@ -191,8 +191,8 @@ def groom(queue_file, user, dry_run, log_file, cleanup_job_ids, chunk_size, max_
         return
 
     user = user or subprocess.getoutput("whoami")
-    chunk_size = data.get("chunk_size", chunk_size)
-    max_jobs = data.get("max_jobs", max_jobs)
+    chunk_size = data["chunk_size"] if chunk_size is None else chunk_size
+    max_jobs = data["max_jobs"] if max_jobs is None else max_jobs
     current_jobs = get_total_jobs(user)
     remaining_slots = max_jobs - current_jobs
 
