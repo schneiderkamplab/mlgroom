@@ -1,10 +1,11 @@
 import click
 import copy
-import yaml
-import subprocess
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 import re
+import subprocess
+import sys
+import yaml
 
 def parse_ranges(ranges):
     result = set()
@@ -151,6 +152,22 @@ def submit_array(script_path, name, start, end, dry_run=False, log_file=None):
         log_message(log_file, "warn", msg)
         return False, None
 
+def chunk_task_ids(task_ids, chunk_size):
+    """
+    Given a sorted list of task IDs (assumed contiguous),
+    return list of (start, end) chunks of at most chunk_size length.
+    """
+    if not task_ids:
+        return []
+
+    chunks = []
+    start = task_ids[0]
+    for i in range(0, len(task_ids), chunk_size):
+        chunk_start = task_ids[i]
+        chunk_end = task_ids[min(i + chunk_size - 1, len(task_ids) - 1)]
+        chunks.append((chunk_start, chunk_end))
+    return chunks
+
 @click.group()
 def cli():
     pass
@@ -200,24 +217,8 @@ def groom(queue_file, user, dry_run, log_file, cleanup_job_ids, chunk_size, max_
         job.setdefault("job_ids", {})
         handled = submitted.union(completed).union(failed)
 
-        all_chunks = []
-        curr_range = []
-        prev = None
-        for tid in task_ids:
-            if prev is None or tid == prev + 1:
-                curr_range.append(tid)
-            else:
-                if curr_range:
-                    all_chunks.extend(chunkify(curr_range[0], curr_range[-1], chunk_size))
-                curr_range = [tid]
-            prev = tid
-        if curr_range:
-            all_chunks.extend(chunkify(curr_range[0], curr_range[-1], chunk_size))
-
-        available_chunks = [
-            (start, end) for start, end in all_chunks
-            if set(range(start, end + 1)).isdisjoint(handled)
-        ]
+        remaining = sorted(set(task_ids) - handled)
+        available_chunks = chunk_task_ids(remaining, chunk_size)
 
         for start, end in available_chunks:
             size = end - start + 1
@@ -290,5 +291,5 @@ def append(job_definition, queue_file, chunk_size, max_jobs):
     data.setdefault("chunk_size", chunk_size)
     data.setdefault("max_jobs", max_jobs)
     with open(path, "w") as f:
-        yaml.safe_dump(data, f)
+        yaml.safe_dump(data, sys.stdout)
     click.echo(f"[OK] Appended job '{name}' with tasks: {format_ranges(range_parsed)}")
