@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mlg-slurm = "mlgroom.slurm:groom"
+mlg-slurm = "mlgroom.slurm:cli"
 
 [tool.hatch.build.targets.wheel]
 only-include = ["mlgroom"]
