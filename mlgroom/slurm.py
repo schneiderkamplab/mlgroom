@@ -45,7 +45,7 @@ def get_total_jobs(user):
 
 def get_completed_job_ids():
     """Return a dict of job_id -> state for jobs in terminal states."""
-    cmd = ["sacct", "--format=JobID,State", "--parsable2", "--noheader"]
+    cmd = ["sacct", "--format=JobID,State", "--parsable2", "--noheader", "--starttime=now-7days"]
     result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
     completed = {}
     for line in result.stdout.strip().split("\n"):
