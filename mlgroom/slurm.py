@@ -173,16 +173,10 @@ def write_yaml_with_confirmation(data, original_data, path, yes=False):
         with open(path, "w") as f:
             yaml.safe_dump(data, f)
         return True
-    click.echo("Proposed changes (diff):")
-    original_yaml_lines = dump_yaml_to_str(original_data)
-    modified_yaml_lines = dump_yaml_to_str(data)
-    diff = difflib.unified_diff(
-        original_yaml_lines,
-        modified_yaml_lines,
-        fromfile="original",
-        tofile="modified"
-    )
-    click.echo_via_pager("".join(diff))
+    diff = compute_diff(original_data, data)
+    if diff is not None:
+        click.echo("Proposed changes (diff):")
+        click.echo_via_pager(diff)
     if click.confirm("Apply changes?", default=False):
         with open(path, "w") as f:
             yaml.safe_dump(data, f)
@@ -190,6 +184,18 @@ def write_yaml_with_confirmation(data, original_data, path, yes=False):
     else:
         click.echo("[ABORTED] No changes were made.")
         return False
+
+def compute_diff(original_data, modified_data):
+    original_yaml_lines = dump_yaml_to_str(original_data)
+    modified_yaml_lines = dump_yaml_to_str(modified_data)
+    diff = difflib.unified_diff(
+        original_yaml_lines,
+        modified_yaml_lines,
+        fromfile="original",
+        tofile="modified"
+    )
+    diff = "".join(diff)
+    return diff if diff else None
 
 @click.group()
 def cli():
@@ -251,27 +257,20 @@ def groom(queue_file, user, submit, log_file, cleanup_job_ids, chunk_size, max_j
                 break
         submitted = parse_ranges(job.get("submitted", []))
         job["submitted"] = format_ranges(submitted)
+    diff = compute_diff(original_data, data)
     if submit:
         if data != original_data:
             with open(path, "w") as f:
                 yaml.safe_dump(data, f)
             click.echo("[DONE] YAML updated.")
+            click.echo_via_pager(diff)
             log_message(log_file, "info", "YAML updated and written to disk.")
         else:
             click.echo("[OK] No changes to write.")
             log_message(log_file, "info", "No updates.")
     else:
         click.echo("[DRY-RUN] No jobs submitted and YAML not written to disk.")
-        original_yaml_lines = dump_yaml_to_str(original_data)
-        modified_yaml_lines = dump_yaml_to_str(data)
-        diff = difflib.unified_diff(
-            original_yaml_lines,
-            modified_yaml_lines,
-            fromfile="original",
-            tofile="modified"
-        )
-        diff = "".join(diff)
-        if not diff:
+        if diff is None:
             click.echo("[OK] No changes to YAML.")
             log_message(log_file, "info", "No changes to YAML.")
         else:
