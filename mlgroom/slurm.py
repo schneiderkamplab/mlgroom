@@ -1,6 +1,8 @@
 import click
 import copy
 from datetime import datetime
+import difflib
+import io
 from pathlib import Path
 import re
 import subprocess
@@ -162,6 +164,34 @@ def chunk_task_ids(task_ids, chunk_size):
         chunks.append((chunk_start, chunk_end))
     return chunks
 
+def dump_yaml_to_str(obj):
+    buf = io.StringIO()
+    yaml.safe_dump(obj, buf)
+    return buf.getvalue().splitlines(keepends=True)
+
+def write_yaml_with_confirmation(data, original_data, path, yes=False):
+    if yes:
+        with open(path, "w") as f:
+            yaml.safe_dump(data, f)
+        return True
+    click.echo("Proposed changes (diff):")
+    original_yaml_lines = dump_yaml_to_str(original_data)
+    modified_yaml_lines = dump_yaml_to_str(data)
+    diff = difflib.unified_diff(
+        original_yaml_lines,
+        modified_yaml_lines,
+        fromfile="original",
+        tofile="modified"
+    )
+    click.echo_via_pager("".join(diff))
+    if click.confirm("Apply changes?", default=False):
+        with open(path, "w") as f:
+            yaml.safe_dump(data, f)
+        return True
+    else:
+        click.echo("[ABORTED] No changes were made.")
+        return False
+
 @click.group()
 def cli():
     pass
@@ -170,11 +200,12 @@ def cli():
 @click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to groom (default: groom.yml)")
 @click.option("--user", default=None, help="Username for SLURM squeue/sacct commands (default: current user)")
 @click.option("--dry-run", is_flag=True, help="Do not submit jobs, only print what would happen (default: False)")
-@click.option("--log-file", default="groom.log", type=click.Path(), help="Log file to append job activity to (default: groom.log)")
 @click.option("--cleanup-job-ids", is_flag=True, help="Remove job IDs for completed jobs from the YAML file (default: False)")
 @click.option("--chunk-size", type=int, default=None, help="Chunk size for array jobs (default: read from YAML)")
 @click.option("--max-jobs", type=int, default=None, help="Max total running jobs (default: read from YAML)")
-def groom(queue_file, user, dry_run, log_file, cleanup_job_ids, chunk_size, max_jobs):
+@click.option("--yes", is_flag=True, help="Automatically confirm changes without prompting (default: False)")
+@click.option("--log-file", default="groom.log", type=click.Path(), help="Log file to append job activity to (default: groom.log)")
+def groom(queue_file, user, dry_run, cleanup_job_ids, chunk_size, max_jobs, yes, log_file):
     path = Path(queue_file)
     if path.exists():
         with open(path) as f:
@@ -222,32 +253,29 @@ def groom(queue_file, user, dry_run, log_file, cleanup_job_ids, chunk_size, max_
                 break
         submitted = parse_ranges(job.get("submitted", []))
         job["submitted"] = format_ranges(submitted)
-    if not dry_run:
-        if data != original_data:
-            with open(path, "w") as f:
-                yaml.safe_dump(data, f)
+    if data != original_data:
+        if write_yaml_with_confirmation(data, original_data, path, yes=yes):
             click.echo("[DONE] YAML updated.")
             log_message(log_file, "info", "YAML updated and written to disk.")
         else:
-            click.echo("[OK] No changes to write.")
-            log_message(log_file, "info", "No updates.")
+            click.echo("[ABORTED] No changes were made.")
     else:
-        click.echo("[DRY-RUN] YAML not written to disk.")
-        print(data)
-        log_message(log_file, "info", "Dry-run: nothing written to disk.")
+        click.echo("[OK] No changes made to queue.")
+        log_message(log_file, "info", "No changes made to queue.")
 
 @cli.command()
 @click.option("--job", default=None, help="Job name to resubmit (default: all jobs with failed tasks)")
 @click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to modify (default: groom.yml)")
+@click.option("--yes", is_flag=True, help="Automatically confirm changes without prompting (default: False)")
 @click.option("--log-file", default="groom.log", type=click.Path(), help="Log file to write to (default: groom.log)")
-@click.option("--dry-run", is_flag=True, help="Show what would change but do not write to file (default: False)")
-def resubmit(job, queue_file, log_file, dry_run):
+def resubmit(job, queue_file, log_file, yes):
     path = Path(queue_file)
     if not path.exists():
         click.echo("[ERROR] Queue file does not exist.")
         return
     with open(path) as f:
         data = yaml.safe_load(f)
+    original_data = copy.deepcopy(data)
     jobs = data.get("jobs", [])
     if job:
         jobs = [j for j in jobs if j["name"] == job]
@@ -298,32 +326,31 @@ def resubmit(job, queue_file, log_file, dry_run):
         else:
             click.echo(f"[INFO] {name}: no affected chunks found.")
     if modified:
-        if dry_run:
-            click.echo("[DRY-RUN] No changes written to file. Proposed YAML output:")
-            yaml.safe_dump(data, sys.stdout)
-            log_message(log_file, "info", f"Dry-run: resubmit changes shown for queue '{queue_file}'")
+        if write_yaml_with_confirmation(data, original_data, path, yes=yes):
+            click.echo("[DONE] Resubmission cleanup completed.")
+            log_message(log_file, "info", "Resubmission cleanup completed and written to disk.")
         else:
-            with open(path, "w") as f:
-                yaml.safe_dump(data, f)
-            click.echo("[DONE] Queue file updated.")
-            log_message(log_file, "info", f"Resubmit cleanup written to '{queue_file}'")
+            click.echo("[ABORTED] No changes were made.")
+            log_message(log_file, "info", "Resubmission cleanup aborted, no changes made.")
     else:
         click.echo("[OK] No changes made to queue.")
+        log_message(log_file, "info", "No changes made to queue.")
 
 @cli.command()
 @click.argument("job_definition")
 @click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to write to (default: groom.yml)")
 @click.option("--chunk-size", type=int, default=10, help="Chunk size for array jobs (default: 10)")
 @click.option("--max-jobs", type=int, default=200, help="Max total running jobs (default: 200)")
-@click.option("--dry-run", is_flag=True, help="Only show what would be added without writing to disk")
-def append(job_definition, queue_file, chunk_size, max_jobs, dry_run):
+@click.option("--log-file", default="groom.log", type=click.Path(), help="Log file to write to (default: groom.log)")
+@click.option("--yes", is_flag=True, help="Automatically confirm changes without prompting (default: False)")
+def append(job_definition, queue_file, chunk_size, max_jobs, log_file, yes):
     path = Path(queue_file)
     if path.exists():
         with open(path) as f:
             data = yaml.safe_load(f)
     else:
         data = {"jobs": []}
-
+    original_data = copy.deepcopy(data)
     parts = job_definition.split(":")
     if len(parts) != 2:
         raise click.UsageError("append must be in the format 'script:range'")
@@ -347,10 +374,9 @@ def append(job_definition, queue_file, chunk_size, max_jobs, dry_run):
     data.setdefault("jobs", []).append(job_entry)
     data.setdefault("chunk_size", chunk_size)
     data.setdefault("max_jobs", max_jobs)
-    if dry_run:
-        click.echo("[DRY-RUN] No changes written to disk. Proposed YAML:")
-        yaml.safe_dump(data, sys.stdout)
-    else:
-        with open(path, "w") as f:
-            yaml.safe_dump(data, f)
+    if write_yaml_with_confirmation(data, original_data, path, yes=yes):
         click.echo(f"[OK] Appended job '{name}' with tasks: {format_ranges(range_parsed)}")
+        log_message(log_file, "info", f"Appended job '{name}' with tasks: {format_ranges(range_parsed)}")
+    else:
+        click.echo("[ABORTED] No changes were made.")
+        log_message(log_file, "info", "Append operation aborted, no changes made.")
