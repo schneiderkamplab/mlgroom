@@ -263,7 +263,7 @@ def groom(queue_file, user, submit, log_file, cleanup_job_ids, chunk_size, max_j
             with open(path, "w") as f:
                 yaml.safe_dump(data, f)
             click.echo("[DONE] YAML updated.")
-            click.echo_via_pager(diff)
+            click.echo(diff)
             log_message(log_file, "info", "YAML updated and written to disk.")
         else:
             click.echo("[OK] No changes to write.")
