@@ -1,27 +1,11 @@
 import click
 import copy
-from datetime import datetime
-import difflib
-import io
 from pathlib import Path
 import re
 import subprocess
 import yaml
 
-def parse_ranges(ranges):
-    result = set()
-    for r in ranges or []:
-        if isinstance(r, int):
-            result.add(r)
-        elif '-' in str(r):
-            start, end = map(int, str(r).split('-'))
-            result.update(range(start, end + 1))
-        else:
-            result.add(int(r))
-    return result
-
-def chunkify(start, end, size):
-    return [(i, min(i + size - 1, end)) for i in range(start, end + 1, size)]
+from .utils import *
 
 def get_total_jobs(user):
     cmd = ["squeue", "-u", user, "-h", "-o", "%i|%T"]
@@ -60,28 +44,6 @@ def get_completed_failed_job_ids():
         if jobid.endswith(".batch") and state in {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY"}:
             failed[jobid] = state
     return completed, failed
-
-def format_ranges(numbers):
-    if not numbers:
-        return []
-    sorted_nums = sorted(set(numbers))
-    ranges = []
-    start = prev = sorted_nums[0]
-    for n in sorted_nums[1:]:
-        if n == prev + 1:
-            prev = n
-        else:
-            ranges.append(f"{start}-{prev}" if start != prev else str(start))
-            start = prev = n
-    ranges.append(f"{start}-{prev}" if start != prev else str(start))
-    return ranges
-
-def log_message(log_file, level, message):
-    if not log_file:
-        return
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(log_file, "a") as f:
-        f.write(f"[{timestamp}] {level.upper()} {message}\n")
 
 def update_completed_failed_jobs(jobs, completed_jobs, failed_jobs, log_file=None, cleanup_job_ids=False):
     for job in jobs:
@@ -162,40 +124,6 @@ def chunk_task_ids(task_ids, chunk_size):
         chunk_end = task_ids[min(i + chunk_size - 1, len(task_ids) - 1)]
         chunks.append((chunk_start, chunk_end))
     return chunks
-
-def dump_yaml_to_str(obj):
-    buf = io.StringIO()
-    yaml.safe_dump(obj, buf)
-    return buf.getvalue().splitlines(keepends=True)
-
-def write_yaml_with_confirmation(data, original_data, path, yes=False):
-    if yes:
-        with open(path, "w") as f:
-            yaml.safe_dump(data, f)
-        return True
-    diff = compute_diff(original_data, data)
-    if diff is not None:
-        click.echo("Proposed changes (diff):")
-        click.echo_via_pager(diff)
-    if click.confirm("Apply changes?", default=False):
-        with open(path, "w") as f:
-            yaml.safe_dump(data, f)
-        return True
-    else:
-        click.echo("[ABORTED] No changes were made.")
-        return False
-
-def compute_diff(original_data, modified_data):
-    original_yaml_lines = dump_yaml_to_str(original_data)
-    modified_yaml_lines = dump_yaml_to_str(modified_data)
-    diff = difflib.unified_diff(
-        original_yaml_lines,
-        modified_yaml_lines,
-        fromfile="original",
-        tofile="modified"
-    )
-    diff = "".join(diff)
-    return diff if diff else None
 
 @click.group()
 def cli():
