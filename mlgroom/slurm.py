@@ -297,7 +297,7 @@ def resubmit(job, queue_file, log_file, yes):
             for (ns, ne) in new_ranges:
                 chunk_key = format_range(ns, ne)
                 updated_job_ids[chunk_key] = jid
-                updated_submitted.add_range(ns, ne)
+                updated_submitted.update(range(ns, ne + 1))
 
         # Update job struct
         j["job_ids"] = updated_job_ids
