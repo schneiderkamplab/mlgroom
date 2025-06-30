@@ -260,7 +260,7 @@ def resubmit(job, queue_file, log_file, yes):
         cleaned = False
         failed_set = set(map(int, failed_tasks))
 
-        # Build range-to-job_id mapping
+        # Build original job_id ranges
         job_id_ranges = []
         for k, v in j.get("job_ids", {}).items():
             if "-" in k:
@@ -287,15 +287,13 @@ def resubmit(job, queue_file, log_file, yes):
             click.echo(msg)
             log_message(log_file, "info", msg)
 
-            # Per-task resubmit count
             for task_id in intersection:
                 str_id = str(task_id)
                 resubmit_counts[str_id] = resubmit_counts.get(str_id, 0) + 1
 
-            # Remove the original chunk from job_ids (if present)
             updated_job_ids.pop(chunk_str, None)
 
-            # Split clean ranges
+            # Split chunk on failed tasks
             new_chunks = split_chunk_on_failures(start, end, failed_set)
             updated_submitted.extend(new_chunks)
 
@@ -304,10 +302,17 @@ def resubmit(job, queue_file, log_file, yes):
                     ns, ne = map(int, new_chunk.split("-"))
                 else:
                     ns = ne = int(new_chunk)
+
+                assigned = False
                 for s, e, jid in job_id_ranges:
                     if ns >= s and ne <= e:
                         updated_job_ids[new_chunk] = jid
-                        break  # stop at first match
+                        log_message(log_file, "debug", f"Assigned job_id {jid} to chunk {new_chunk} from range {s}-{e}")
+                        assigned = True
+                        break
+
+                if not assigned:
+                    log_message(log_file, "warn", f"No job_id found for chunk {new_chunk} (ns={ns}, ne={ne})")
 
         if cleaned:
             j["submitted"] = format_ranges(parse_ranges(updated_submitted))
