@@ -260,7 +260,7 @@ def resubmit(job, queue_file, log_file, yes):
         cleaned = False
         failed_set = set(map(int, failed_tasks))
 
-        # Build original job_id ranges
+        # Build job_id range index
         job_id_ranges = []
         for k, v in j.get("job_ids", {}).items():
             if "-" in k:
@@ -268,6 +268,8 @@ def resubmit(job, queue_file, log_file, yes):
             else:
                 s = e = int(k)
             job_id_ranges.append((s, e, v))
+
+        log_message(log_file, "debug", f"Job ID ranges for {name}: {[f'{s}-{e}:{jid}' for s, e, jid in job_id_ranges]}")
 
         for chunk_str in submitted_chunks:
             if "-" in chunk_str:
@@ -293,38 +295,29 @@ def resubmit(job, queue_file, log_file, yes):
 
             updated_job_ids.pop(chunk_str, None)
 
-            # Split chunk on failed tasks
+            # Create cleaned subchunks
             new_chunks = split_chunk_on_failures(start, end, failed_set)
             updated_submitted.extend(new_chunks)
 
             for new_chunk in new_chunks:
-                if not found:
-                    log_message(log_file, "warn", f"  → NO MATCH FOUND for chunk {new_chunk}")
                 if "-" in new_chunk:
                     ns, ne = map(int, new_chunk.split("-"))
                 else:
                     ns = ne = int(new_chunk)
 
                 log_message(log_file, "debug", f"Checking job_id match for new chunk {new_chunk} (ns={ns}, ne={ne})")
-                found = False
+
+                matched = False
                 for s, e, jid in job_id_ranges:
-                    log_message(log_file, "debug", f"  Against original chunk range {s}-{e}")
+                    log_message(log_file, "debug", f"  Against original chunk range {s}-{e} with job_id {jid}")
                     if ns >= s and ne <= e:
                         updated_job_ids[new_chunk] = jid
-                        log_message(log_file, "debug", f"  → MATCHED: assigned {jid} to {new_chunk}")
-                        found = True
+                        log_message(log_file, "debug", f"  → MATCHED: assigned job_id {jid} to chunk {new_chunk}")
+                        matched = True
                         break
 
-                assigned = False
-                for s, e, jid in job_id_ranges:
-                    if ns >= s and ne <= e:
-                        updated_job_ids[new_chunk] = jid
-                        log_message(log_file, "debug", f"Assigned job_id {jid} to chunk {new_chunk} from range {s}-{e}")
-                        assigned = True
-                        break
-
-                if not assigned:
-                    log_message(log_file, "warn", f"No job_id found for chunk {new_chunk} (ns={ns}, ne={ne})")
+                if not matched:
+                    log_message(log_file, "warn", f"  → NO MATCH FOUND for chunk {new_chunk}")
 
         if cleaned:
             j["submitted"] = format_ranges(parse_ranges(updated_submitted))
