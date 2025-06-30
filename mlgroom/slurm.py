@@ -239,46 +239,35 @@ def resubmit(job, queue_file, log_file, yes, max_resubmissions):
     if not path.exists():
         click.echo("[ERROR] Queue file does not exist.")
         return
-
     with open(path) as f:
         data = yaml.safe_load(f)
     original_data = copy.deepcopy(data)
     jobs = data.get("jobs", [])
-
     if job:
         jobs = [j for j in jobs if j["name"] == job]
         if not jobs:
             click.echo(f"[ERROR] Job '{job}' not found in queue.")
             return
-
     modified = False
-
     for j in jobs:
         name = j["name"]
         failed = sorted(parse_ranges(j.get("failed", [])))
         if not failed:
             click.echo(f"[INFO] No failed tasks to clean for job '{name}'.")
             continue
-
         job_ids = j.get("job_ids", {})
         submitted = parse_ranges(j.get("submitted", []))
         resubmit_counts = j.get("resubmit_counts", {}).copy()
-
         updated_job_ids = {}
         updated_submitted = set(submitted)
-
         contaminated_chunks = set()
         chunk_to_id = {}
-
-        # Build range -> job ID map
         for chunk_str, jid in job_ids.items():
             if "-" in chunk_str:
                 s, e = map(int, chunk_str.split("-"))
             else:
                 s = e = int(chunk_str)
             chunk_to_id[(s, e)] = jid
-
-        # Filter out tasks that exceed max resubmissions
         eligible_failed = []
         for task_id in failed:
             count = resubmit_counts.get(str(task_id), 0)
@@ -286,12 +275,9 @@ def resubmit(job, queue_file, log_file, yes, max_resubmissions):
                 eligible_failed.append(task_id)
             else:
                 log_message(log_file, "warning", f"[SKIPPED] {name}: task {task_id} exceeded max resubmissions ({count} ≥ {max_resubmissions})")
-
         if not eligible_failed:
             click.echo(f"[INFO] No eligible failed tasks to resubmit for job '{name}'.")
             continue
-
-        # Mark tasks to be resubmitted and contaminate their chunks
         for task_id in eligible_failed:
             for (s, e), jid in chunk_to_id.items():
                 if s <= task_id <= e:
@@ -299,24 +285,19 @@ def resubmit(job, queue_file, log_file, yes, max_resubmissions):
                     resubmit_counts[str(task_id)] = resubmit_counts.get(str(task_id), 0) + 1
                     log_message(log_file, "info", f"[CLEANUP] {name}: task {task_id} failed in chunk {s}-{e}")
                     break
-
-        # Rebuild job_ids and submitted
         for (s, e), jid in chunk_to_id.items():
             if (s, e) not in contaminated_chunks:
                 updated_job_ids[format_range(s, e)] = jid
                 continue
-
             failed_in_chunk = {t for t in eligible_failed if s <= t <= e}
             survivors = [t for t in range(s, e + 1) if t not in failed_in_chunk]
             if not survivors:
                 continue
-
             new_ranges = split_into_ranges(survivors)
             for (ns, ne) in new_ranges:
                 chunk_key = format_range(ns, ne)
                 updated_job_ids[chunk_key] = jid
                 updated_submitted.update(range(ns, ne + 1))
-
         j["job_ids"] = updated_job_ids
         original_submitted = parse_ranges(j.get("submitted", []))
         clean_tasks = sorted(set(original_submitted) - set(eligible_failed))
@@ -328,7 +309,6 @@ def resubmit(job, queue_file, log_file, yes, max_resubmissions):
         j["failed"] = []
         modified = True
         click.echo(f"[OK] {name}: cleaned eligible failed tasks, rebuilt job_ids and submitted.")
-
     if modified:
         if write_yaml_with_confirmation(data, original_data, path, yes=yes):
             click.echo("[DONE] Resubmission cleanup completed.")
