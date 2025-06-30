@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import yaml
 
-__all__ = ["chunkify", "compute_diff", "format_ranges", "log_message", "parse_ranges", "write_yaml_with_confirmation"]
+__all__ = ["chunkify", "compute_diff", "format_range", "format_ranges", "log_message", "parse_ranges", "split_into_ranges", "write_yaml_with_confirmation"]
 
 def atomic_yaml_save(path: Path, data, backup_suffix=".bak"):
     path = path.resolve()
@@ -54,6 +54,9 @@ def dump_yaml_to_str(obj):
     yaml.safe_dump(obj, buf)
     return buf.getvalue().splitlines(keepends=True)
 
+def format_range(s, e):
+    return f"{s}-{e}" if s != e else str(s)
+
 def format_ranges(numbers):
     if not numbers:
         return []
@@ -87,6 +90,21 @@ def parse_ranges(ranges):
         else:
             result.add(int(r))
     return result
+
+def split_into_ranges(tasks):
+    if not tasks:
+        return []
+    tasks = sorted(tasks)
+    ranges = []
+    start = prev = tasks[0]
+    for t in tasks[1:]:
+        if t == prev + 1:
+            prev = t
+        else:
+            ranges.append((start, prev))
+            start = prev = t
+    ranges.append((start, prev))
+    return ranges
 
 def write_yaml_with_confirmation(data, original_data, path, yes=False):
     if yes:
