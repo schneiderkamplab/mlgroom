@@ -233,7 +233,8 @@ def groom(queue_file, user, submit, log_file, cleanup_job_ids, chunk_size, max_j
 @click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to modify (default: groom.yml)")
 @click.option("--yes", is_flag=True, help="Automatically confirm changes without prompting (default: False)")
 @click.option("--log-file", default="groom.log", type=click.Path(), help="Log file to write to (default: groom.log)")
-def resubmit(job, queue_file, log_file, yes):
+@click.option("--max-resubmissions", default=3, type=int, help="Maximum number of resubmissions per task (0 = unlimited)")
+def resubmit(job, queue_file, log_file, yes, max_resubmissions):
     path = Path(queue_file)
     if not path.exists():
         click.echo("[ERROR] Queue file does not exist.")
@@ -277,8 +278,21 @@ def resubmit(job, queue_file, log_file, yes):
                 s = e = int(chunk_str)
             chunk_to_id[(s, e)] = jid
 
-        # Iterate over failed tasks
+        # Filter out tasks that exceed max resubmissions
+        eligible_failed = []
         for task_id in failed:
+            count = resubmit_counts.get(str(task_id), 0)
+            if max_resubmissions == 0 or count < max_resubmissions:
+                eligible_failed.append(task_id)
+            else:
+                log_message(log_file, "warning", f"[SKIPPED] {name}: task {task_id} exceeded max resubmissions ({count} ≥ {max_resubmissions})")
+
+        if not eligible_failed:
+            click.echo(f"[INFO] No eligible failed tasks to resubmit for job '{name}'.")
+            continue
+
+        # Mark tasks to be resubmitted and contaminate their chunks
+        for task_id in eligible_failed:
             for (s, e), jid in chunk_to_id.items():
                 if s <= task_id <= e:
                     contaminated_chunks.add((s, e))
@@ -289,12 +303,10 @@ def resubmit(job, queue_file, log_file, yes):
         # Rebuild job_ids and submitted
         for (s, e), jid in chunk_to_id.items():
             if (s, e) not in contaminated_chunks:
-                # Unaffected — keep as-is
                 updated_job_ids[format_range(s, e)] = jid
                 continue
 
-            # Rebuild clean parts of affected chunk
-            failed_in_chunk = {t for t in failed if s <= t <= e}
+            failed_in_chunk = {t for t in eligible_failed if s <= t <= e}
             survivors = [t for t in range(s, e + 1) if t not in failed_in_chunk]
             if not survivors:
                 continue
@@ -305,10 +317,9 @@ def resubmit(job, queue_file, log_file, yes):
                 updated_job_ids[chunk_key] = jid
                 updated_submitted.update(range(ns, ne + 1))
 
-        # Update job struct
         j["job_ids"] = updated_job_ids
         original_submitted = parse_ranges(j.get("submitted", []))
-        clean_tasks = sorted(set(original_submitted) - set(failed))
+        clean_tasks = sorted(set(original_submitted) - set(eligible_failed))
         j["submitted"] = [
             f"{s}-{e}" if s != e else str(s)
             for (s, e) in split_into_ranges(clean_tasks)
@@ -316,7 +327,7 @@ def resubmit(job, queue_file, log_file, yes):
         j["resubmit_counts"] = resubmit_counts
         j["failed"] = []
         modified = True
-        click.echo(f"[OK] {name}: cleaned failed tasks, rebuilt job_ids and submitted.")
+        click.echo(f"[OK] {name}: cleaned eligible failed tasks, rebuilt job_ids and submitted.")
 
     if modified:
         if write_yaml_with_confirmation(data, original_data, path, yes=yes):
