@@ -260,6 +260,15 @@ def resubmit(job, queue_file, log_file, yes):
         cleaned = False
         failed_set = set(map(int, failed_tasks))
 
+        # Build a chunk lookup for job_ids
+        job_id_map = {}
+        for chunk_str, jid in j.get("job_ids", {}).items():
+            if "-" in chunk_str:
+                start, end = map(int, chunk_str.split("-"))
+            else:
+                start = end = int(chunk_str)
+            job_id_map[(start, end)] = jid
+
         for chunk_str in submitted_chunks:
             if "-" in chunk_str:
                 start, end = map(int, chunk_str.split("-"))
@@ -278,21 +287,29 @@ def resubmit(job, queue_file, log_file, yes):
             click.echo(msg)
             log_message(log_file, "info", msg)
 
-            # Increment resubmit count per failed task
+            # Update resubmit count per failed task
             for task_id in intersection:
                 str_id = str(task_id)
                 resubmit_counts[str_id] = resubmit_counts.get(str_id, 0) + 1
 
-            # Capture and remove the original job ID
-            job_id = j["job_ids"].get(chunk_str)
+            # Remove the original chunk from job_ids
             updated_job_ids.pop(chunk_str, None)
 
-            # Split and preserve non-failed subchunks
+            # Split clean parts
             new_chunks = split_chunk_on_failures(start, end, failed_set)
             updated_submitted.extend(new_chunks)
+
             for new_chunk in new_chunks:
-                if job_id is not None:
-                    updated_job_ids[new_chunk] = job_id
+                if "-" in new_chunk:
+                    ns, ne = map(int, new_chunk.split("-"))
+                else:
+                    ns = ne = int(new_chunk)
+
+                # Find the original job_id range that this chunk falls into
+                for (os, oe), jid in job_id_map.items():
+                    if ns >= os and ne <= oe:
+                        updated_job_ids[new_chunk] = jid
+                        break
 
         if cleaned:
             j["submitted"] = format_ranges(parse_ranges(updated_submitted))
@@ -300,7 +317,7 @@ def resubmit(job, queue_file, log_file, yes):
             j["resubmit_counts"] = resubmit_counts
             j["failed"] = []
             modified = True
-            click.echo(f"[OK] {name}: removed failed tasks and updated job mappings.")
+            click.echo(f"[OK] {name}: cleaned failed tasks and rebuilt job_id mappings.")
         else:
             click.echo(f"[INFO] {name}: no overlapping submitted chunks found.")
 
