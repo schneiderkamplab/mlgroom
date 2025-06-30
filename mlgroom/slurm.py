@@ -248,86 +248,64 @@ def resubmit(job, queue_file, log_file, yes):
 
     for j in jobs:
         name = j["name"]
-        failed_tasks = sorted(parse_ranges(j.get("failed", [])))
-        if not failed_tasks:
+        failed = sorted(parse_ranges(j.get("failed", [])))
+        if not failed:
             click.echo(f"[INFO] No failed tasks to clean for job '{name}'.")
             continue
 
-        submitted_chunks = j.get("submitted", [])
-        updated_submitted = []
-        updated_job_ids = j.get("job_ids", {}).copy()
+        job_ids = j.get("job_ids", {})
+        submitted = parse_ranges(j.get("submitted", []))
         resubmit_counts = j.get("resubmit_counts", {}).copy()
-        cleaned = False
-        failed_set = set(map(int, failed_tasks))
 
-        # Build job_id range index
-        job_id_ranges = []
-        for k, v in j.get("job_ids", {}).items():
-            if "-" in k:
-                s, e = map(int, k.split("-"))
-            else:
-                s = e = int(k)
-            job_id_ranges.append((s, e, v))
+        updated_job_ids = {}
+        updated_submitted = set(submitted)
 
-        log_message(log_file, "debug", f"Job ID ranges for {name}: {[f'{s}-{e}:{jid}' for s, e, jid in job_id_ranges]}")
+        contaminated_chunks = set()
+        chunk_to_id = {}
 
-        for chunk_str in submitted_chunks:
+        # Build range -> job ID map
+        for chunk_str, jid in job_ids.items():
             if "-" in chunk_str:
-                start, end = map(int, chunk_str.split("-"))
-                chunk_tasks = set(range(start, end + 1))
+                s, e = map(int, chunk_str.split("-"))
             else:
-                start = end = int(chunk_str)
-                chunk_tasks = {start}
+                s = e = int(chunk_str)
+            chunk_to_id[(s, e)] = jid
 
-            intersection = chunk_tasks & failed_set
-            if not intersection:
-                updated_submitted.append(chunk_str)
+        # Iterate over failed tasks
+        for task_id in failed:
+            for (s, e), jid in chunk_to_id.items():
+                if s <= task_id <= e:
+                    contaminated_chunks.add((s, e))
+                    resubmit_counts[str(task_id)] = resubmit_counts.get(str(task_id), 0) + 1
+                    log_message(log_file, "info", f"[CLEANUP] {name}: task {task_id} failed in chunk {s}-{e}")
+                    break
+
+        # Rebuild job_ids and submitted
+        for (s, e), jid in chunk_to_id.items():
+            if (s, e) not in contaminated_chunks:
+                # Unaffected — keep as-is
+                updated_job_ids[format_range(s, e)] = jid
                 continue
 
-            cleaned = True
-            msg = f"[CLEANUP] {name}: removing chunk '{chunk_str}' due to failed tasks: {format_ranges(intersection)}"
-            click.echo(msg)
-            log_message(log_file, "info", msg)
+            # Rebuild clean parts of affected chunk
+            failed_in_chunk = {t for t in failed if s <= t <= e}
+            survivors = [t for t in range(s, e + 1) if t not in failed_in_chunk]
+            if not survivors:
+                continue
 
-            for task_id in intersection:
-                str_id = str(task_id)
-                resubmit_counts[str_id] = resubmit_counts.get(str_id, 0) + 1
+            new_ranges = split_into_ranges(survivors)
+            for (ns, ne) in new_ranges:
+                chunk_key = format_range(ns, ne)
+                updated_job_ids[chunk_key] = jid
+                updated_submitted.add_range(ns, ne)
 
-            updated_job_ids.pop(chunk_str, None)
-
-            # Create cleaned subchunks
-            new_chunks = split_chunk_on_failures(start, end, failed_set)
-            updated_submitted.extend(new_chunks)
-
-            for new_chunk in new_chunks:
-                if "-" in new_chunk:
-                    ns, ne = map(int, new_chunk.split("-"))
-                else:
-                    ns = ne = int(new_chunk)
-
-                log_message(log_file, "debug", f"Checking job_id match for new chunk {new_chunk} (ns={ns}, ne={ne})")
-
-                matched = False
-                for s, e, jid in job_id_ranges:
-                    log_message(log_file, "debug", f"  Against original chunk range {s}-{e} with job_id {jid}")
-                    if ns >= s and ne <= e:
-                        updated_job_ids[new_chunk] = jid
-                        log_message(log_file, "debug", f"  → MATCHED: assigned job_id {jid} to chunk {new_chunk}")
-                        matched = True
-                        break
-
-                if not matched:
-                    log_message(log_file, "warn", f"  → NO MATCH FOUND for chunk {new_chunk}")
-
-        if cleaned:
-            j["submitted"] = format_ranges(parse_ranges(updated_submitted))
-            j["job_ids"] = {k: v for k, v in updated_job_ids.items() if v is not None}
-            j["resubmit_counts"] = resubmit_counts
-            j["failed"] = []
-            modified = True
-            click.echo(f"[OK] {name}: cleaned failed tasks and rebuilt job_ids.")
-        else:
-            click.echo(f"[INFO] {name}: no overlapping submitted chunks found.")
+        # Update job struct
+        j["job_ids"] = updated_job_ids
+        j["submitted"] = format_ranges(sorted(updated_submitted))
+        j["resubmit_counts"] = resubmit_counts
+        j["failed"] = []
+        modified = True
+        click.echo(f"[OK] {name}: cleaned failed tasks, rebuilt job_ids and submitted.")
 
     if modified:
         if write_yaml_with_confirmation(data, original_data, path, yes=yes):
