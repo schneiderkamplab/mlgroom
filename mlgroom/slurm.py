@@ -118,11 +118,17 @@ def submit_array(script_path, name, start, end, dry_run=False, log_file=None):
 def chunk_task_ids(task_ids, chunk_size):
     if not task_ids:
         return []
+    task_ids = sorted(task_ids)
     chunks = []
-    for i in range(0, len(task_ids), chunk_size):
-        chunk_start = task_ids[i]
-        chunk_end = task_ids[min(i + chunk_size - 1, len(task_ids) - 1)]
-        chunks.append((chunk_start, chunk_end))
+    current_chunk = [task_ids[0]]
+
+    for tid in task_ids[1:]:
+        if len(current_chunk) < chunk_size and tid == current_chunk[-1] + 1:
+            current_chunk.append(tid)
+        else:
+            chunks.append((current_chunk[0], current_chunk[-1]))
+            current_chunk = [tid]
+    chunks.append((current_chunk[0], current_chunk[-1]))
     return chunks
 
 def split_chunk_on_failures(start, end, failed_set):
