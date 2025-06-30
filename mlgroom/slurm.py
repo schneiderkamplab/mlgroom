@@ -298,6 +298,13 @@ def resubmit(job, queue_file, log_file, yes):
             updated_submitted.extend(new_chunks)
 
             for new_chunk in new_chunks:
+                if not found:
+                    log_message(log_file, "warn", f"  → NO MATCH FOUND for chunk {new_chunk}")
+                if "-" in new_chunk:
+                    ns, ne = map(int, new_chunk.split("-"))
+                else:
+                    ns = ne = int(new_chunk)
+
                 log_message(log_file, "debug", f"Checking job_id match for new chunk {new_chunk} (ns={ns}, ne={ne})")
                 found = False
                 for s, e, jid in job_id_ranges:
@@ -307,12 +314,6 @@ def resubmit(job, queue_file, log_file, yes):
                         log_message(log_file, "debug", f"  → MATCHED: assigned {jid} to {new_chunk}")
                         found = True
                         break
-                if not found:
-                    log_message(log_file, "warn", f"  → NO MATCH FOUND for chunk {new_chunk}")
-                if "-" in new_chunk:
-                    ns, ne = map(int, new_chunk.split("-"))
-                else:
-                    ns = ne = int(new_chunk)
 
                 assigned = False
                 for s, e, jid in job_id_ranges:
