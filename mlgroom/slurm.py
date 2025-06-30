@@ -281,8 +281,10 @@ def resubmit(job, queue_file, log_file, yes):
             # Add back non-failed subchunks
             new_chunks = split_chunk_on_failures(start, end, failed_set)
             updated_submitted.extend(new_chunks)
+            job_id = updated_job_ids.pop(chunk_str, None)
             for new_chunk in new_chunks:
-                updated_job_ids.pop(new_chunk, None)
+                if job_id is not None:
+                    updated_job_ids[new_chunk] = job_id  # Assign original job ID to each clean subchunk
 
         j["submitted"] = format_ranges(parse_ranges(updated_submitted))
         j["job_ids"] = {k: v for k, v in updated_job_ids.items() if v is not None}
