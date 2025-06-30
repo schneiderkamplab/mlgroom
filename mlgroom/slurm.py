@@ -235,38 +235,43 @@ def resubmit(job, queue_file, log_file, yes):
         updated_submitted = []
         updated_job_ids = j.get("job_ids", {}).copy()
         resubmit_counts = j.get("resubmit_counts", {}).copy()
-        cleaned = False
+        failed_set = set(map(int, failed_tasks))
+
         for chunk_str in submitted_chunks:
             if "-" in chunk_str:
                 start, end = map(int, chunk_str.split("-"))
-                chunk_tasks = list(range(start, end + 1))
+                chunk_tasks = set(range(start, end + 1))
             else:
-                chunk_tasks = [int(chunk_str)]
-            failed_in_chunk = sorted(set(chunk_tasks) & set(failed_tasks))
-            if not failed_in_chunk:
+                start = end = int(chunk_str)
+                chunk_tasks = {start}
+
+            intersection = chunk_tasks & failed_set
+            if not intersection:
                 updated_submitted.append(chunk_str)
                 continue
-            msg = f"[CLEANUP] {name}: removing chunk '{chunk_str}' due to failed tasks: {format_ranges(failed_in_chunk)}"
+
+            cleaned = True
+            msg = f"[CLEANUP] {name}: removing chunk '{chunk_str}' due to failed tasks: {format_ranges(intersection)}"
             click.echo(msg)
             log_message(log_file, "info", msg)
             updated_job_ids.pop(chunk_str, None)
-            cleaned = True
-            resubmit_counts[chunk_str] = resubmit_counts.get(chunk_str, 0) + 1
-            remaining_tasks = sorted(set(chunk_tasks) - set(failed_in_chunk))
-            for start, end in chunk_task_ids(remaining_tasks, len(chunk_tasks)):
-                new_chunk = f"{start}-{end}" if start != end else str(start)
-                updated_submitted.append(new_chunk)
-                # Remove old job_id if carried over by accident
+
+            # Per-task resubmit count
+            for task_id in intersection:
+                str_id = str(task_id)
+                resubmit_counts[str_id] = resubmit_counts.get(str_id, 0) + 1
+
+            # Add back non-failed subchunks
+            new_chunks = split_chunk_on_failures(start, end, failed_set)
+            updated_submitted.extend(new_chunks)
+            for new_chunk in new_chunks:
                 updated_job_ids.pop(new_chunk, None)
-        if cleaned:
-            j["submitted"] = format_ranges(parse_ranges(updated_submitted))
-            j["job_ids"] = {k: v for k, v in updated_job_ids.items() if v is not None}
-            j["resubmit_counts"] = resubmit_counts
-            j["failed"] = []
-            modified = True
-            click.echo(f"[OK] {name}: cleaned failed tasks and updated resubmit counts.")
-        else:
-            click.echo(f"[INFO] {name}: no affected chunks found.")
+
+        j["submitted"] = format_ranges(parse_ranges(updated_submitted))
+        j["job_ids"] = {k: v for k, v in updated_job_ids.items() if v is not None}
+        j["resubmit_counts"] = resubmit_counts
+        j["failed"] = []
+        modified = True
     if modified:
         if write_yaml_with_confirmation(data, original_data, path, yes=yes):
             click.echo("[DONE] Resubmission cleanup completed.")
