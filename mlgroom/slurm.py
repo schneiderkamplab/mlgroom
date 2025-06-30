@@ -284,7 +284,7 @@ def resubmit(job, queue_file, log_file, yes):
                 resubmit_counts[str_id] = resubmit_counts.get(str_id, 0) + 1
 
             # Capture and remove the original job ID
-            job_id = updated_job_ids.get(chunk_str)
+            job_id = j["job_ids"].get(chunk_str)
             updated_job_ids.pop(chunk_str, None)
 
             # Split and preserve non-failed subchunks
