@@ -301,7 +301,10 @@ def resubmit(job, queue_file, log_file, yes):
 
         # Update job struct
         j["job_ids"] = updated_job_ids
-        j["submitted"] = format_ranges(split_into_ranges(sorted(updated_submitted)))
+        j["submitted"] = [
+            f"{s}-{e}" if s != e else str(s)
+            for (s, e) in split_into_ranges(sorted(updated_submitted))
+        ]
         j["resubmit_counts"] = resubmit_counts
         j["failed"] = []
         modified = True
