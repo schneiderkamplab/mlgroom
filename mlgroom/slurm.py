@@ -125,6 +125,23 @@ def chunk_task_ids(task_ids, chunk_size):
         chunks.append((chunk_start, chunk_end))
     return chunks
 
+def split_chunk_on_failures(start, end, failed_set):
+    remaining = [i for i in range(start, end + 1) if i not in failed_set]
+    if not remaining:
+        return []
+    result = []
+    run_start = remaining[0]
+    prev = remaining[0]
+    for i in remaining[1:]:
+        if i == prev + 1:
+            prev = i
+        else:
+            result.append((run_start, prev))
+            run_start = i
+            prev = i
+    result.append((run_start, prev))
+    return [f"{s}-{e}" if s != e else str(s) for s, e in result]
+
 @click.group()
 def cli():
     pass
