@@ -232,26 +232,32 @@ def resubmit(job, queue_file, log_file, yes):
     if not path.exists():
         click.echo("[ERROR] Queue file does not exist.")
         return
+
     with open(path) as f:
         data = yaml.safe_load(f)
     original_data = copy.deepcopy(data)
     jobs = data.get("jobs", [])
+
     if job:
         jobs = [j for j in jobs if j["name"] == job]
         if not jobs:
             click.echo(f"[ERROR] Job '{job}' not found in queue.")
             return
+
     modified = False
+
     for j in jobs:
         name = j["name"]
         failed_tasks = sorted(parse_ranges(j.get("failed", [])))
         if not failed_tasks:
             click.echo(f"[INFO] No failed tasks to clean for job '{name}'.")
             continue
+
         submitted_chunks = j.get("submitted", [])
         updated_submitted = []
         updated_job_ids = j.get("job_ids", {}).copy()
         resubmit_counts = j.get("resubmit_counts", {}).copy()
+        cleaned = False
         failed_set = set(map(int, failed_tasks))
 
         for chunk_str in submitted_chunks:
@@ -271,29 +277,33 @@ def resubmit(job, queue_file, log_file, yes):
             msg = f"[CLEANUP] {name}: removing chunk '{chunk_str}' due to failed tasks: {format_ranges(intersection)}"
             click.echo(msg)
             log_message(log_file, "info", msg)
-            updated_job_ids.pop(chunk_str, None)
 
-            # Per-task resubmit count
+            # Increment resubmit count per failed task
             for task_id in intersection:
                 str_id = str(task_id)
                 resubmit_counts[str_id] = resubmit_counts.get(str_id, 0) + 1
 
-            # Capture the job ID for the full chunk before removing it
+            # Capture and remove the original job ID
             job_id = updated_job_ids.get(chunk_str)
-            # Remove the original chunk from job_ids
             updated_job_ids.pop(chunk_str, None)
-            # Add new clean subchunks, inheriting the job ID
+
+            # Split and preserve non-failed subchunks
             new_chunks = split_chunk_on_failures(start, end, failed_set)
             updated_submitted.extend(new_chunks)
             for new_chunk in new_chunks:
                 if job_id is not None:
-                    updated_job_ids[new_chunk] = job_id  # Split job_id mapping
+                    updated_job_ids[new_chunk] = job_id
 
-        j["submitted"] = format_ranges(parse_ranges(updated_submitted))
-        j["job_ids"] = {k: v for k, v in updated_job_ids.items() if v is not None}
-        j["resubmit_counts"] = resubmit_counts
-        j["failed"] = []
-        modified = True
+        if cleaned:
+            j["submitted"] = format_ranges(parse_ranges(updated_submitted))
+            j["job_ids"] = {k: v for k, v in updated_job_ids.items() if v is not None}
+            j["resubmit_counts"] = resubmit_counts
+            j["failed"] = []
+            modified = True
+            click.echo(f"[OK] {name}: removed failed tasks and updated job mappings.")
+        else:
+            click.echo(f"[INFO] {name}: no overlapping submitted chunks found.")
+
     if modified:
         if write_yaml_with_confirmation(data, original_data, path, yes=yes):
             click.echo("[DONE] Resubmission cleanup completed.")
