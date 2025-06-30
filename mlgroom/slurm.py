@@ -278,13 +278,16 @@ def resubmit(job, queue_file, log_file, yes):
                 str_id = str(task_id)
                 resubmit_counts[str_id] = resubmit_counts.get(str_id, 0) + 1
 
-            # Add back non-failed subchunks
+            # Capture the job ID for the full chunk before removing it
+            job_id = updated_job_ids.get(chunk_str)
+            # Remove the original chunk from job_ids
+            updated_job_ids.pop(chunk_str, None)
+            # Add new clean subchunks, inheriting the job ID
             new_chunks = split_chunk_on_failures(start, end, failed_set)
             updated_submitted.extend(new_chunks)
-            job_id = updated_job_ids.pop(chunk_str, None)
             for new_chunk in new_chunks:
                 if job_id is not None:
-                    updated_job_ids[new_chunk] = job_id  # Assign original job ID to each clean subchunk
+                    updated_job_ids[new_chunk] = job_id  # Split job_id mapping
 
         j["submitted"] = format_ranges(parse_ranges(updated_submitted))
         j["job_ids"] = {k: v for k, v in updated_job_ids.items() if v is not None}
