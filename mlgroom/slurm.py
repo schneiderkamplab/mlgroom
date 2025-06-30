@@ -188,6 +188,7 @@ def groom(queue_file, user, submit, log_file, cleanup_job_ids, chunk_size, max_j
         handled = submitted.union(completed).union(failed)
         remaining = sorted(set(task_ids) - handled)
         available_chunks = chunk_task_ids(remaining, chunk_size)
+        print(f"submitted: {submitted}, completed: {completed}, failed: {failed}, remaining: {remaining}, available_chunks: {available_chunks}")
         for start, end in available_chunks:
             size = end - start + 1
             if size > remaining_slots:
