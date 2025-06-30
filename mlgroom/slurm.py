@@ -253,7 +253,7 @@ def resubmit(job, queue_file, log_file, yes):
             cleaned = True
             resubmit_counts[chunk_str] = resubmit_counts.get(chunk_str, 0) + 1
             remaining_tasks = sorted(set(chunk_tasks) - set(failed_in_chunk))
-            for start, end in chunk_task_ids(remaining_tasks, size=len(chunk_tasks)):
+            for start, end in chunk_task_ids(remaining_tasks, len(chunk_tasks)):
                 new_chunk = f"{start}-{end}" if start != end else str(start)
                 updated_submitted.append(new_chunk)
                 # Remove old job_id if carried over by accident
