@@ -273,8 +273,9 @@ def resubmit(job, queue_file, log_file, yes, max_resubmissions, task_ids):
             chunk_to_id[(s, e)] = jid
         eligible_failed = []
         for task_id in failed:
-            print(task_id, task_ids)
+            print(task_id, task_ids, task_id not in task_ids)
             if task_ids and task_id not in task_ids:
+                log_message(log_file, "info", f"[SKIPPED] {name}: task {task_id} not in specified task_ids ({task_ids})")
                 continue
             count = resubmit_counts.get(str(task_id), 0)
             if max_resubmissions == 0 or count < max_resubmissions:
