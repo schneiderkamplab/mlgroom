@@ -400,6 +400,6 @@ def status(queue_file, job, fields):
             output.append(f"Failed: {','.join(format_ranges(parse_ranges(j.get('failed', []))))}")
         if "job_ids" in fields:
             job_ids = j.get("job_ids", {})
-            output.append(f"Job IDs: {', '.join(sorted(f'{k}: {v}' for k, v in job_ids.items()))}")
+            output.append(f"Job IDs: {', '.join(sorted((f'{k}: {v}' for k, v in job_ids.items()), key=lambda x: int(x[0].split('-')[0].split(':')[0])))})")
         click.echo("\n".join(output))
         click.echo("-" * 40)
