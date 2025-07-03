@@ -234,7 +234,8 @@ def groom(queue_file, user, submit, log_file, cleanup_job_ids, chunk_size, max_j
 @click.option("--yes", is_flag=True, help="Automatically confirm changes without prompting (default: False)")
 @click.option("--log-file", default="groom.log", type=click.Path(), help="Log file to write to (default: groom.log)")
 @click.option("--max-resubmissions", default=3, type=int, help="Maximum number of resubmissions per task (0 = unlimited)")
-def resubmit(job, queue_file, log_file, yes, max_resubmissions):
+@click.option("--task-ids", default=None, type=str, help="Comma-separated list of specific task IDs to resubmit (default: all failed tasks)")
+def resubmit(job, queue_file, log_file, yes, max_resubmissions, task_ids):
     path = Path(queue_file)
     if not path.exists():
         click.echo("[ERROR] Queue file does not exist.")
@@ -248,6 +249,8 @@ def resubmit(job, queue_file, log_file, yes, max_resubmissions):
         if not jobs:
             click.echo(f"[ERROR] Job '{job}' not found in queue.")
             return
+    if task_ids:
+        task_ids = set(map(int, map(str.strip, task_ids.split(","))))
     modified = False
     for j in jobs:
         name = j["name"]
@@ -270,6 +273,8 @@ def resubmit(job, queue_file, log_file, yes, max_resubmissions):
             chunk_to_id[(s, e)] = jid
         eligible_failed = []
         for task_id in failed:
+            if task_ids and task_id not in task_ids:
+                continue
             count = resubmit_counts.get(str(task_id), 0)
             if max_resubmissions == 0 or count < max_resubmissions:
                 eligible_failed.append(task_id)
