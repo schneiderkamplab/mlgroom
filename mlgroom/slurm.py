@@ -407,7 +407,7 @@ def status(queue_file, job, fields):
 @cli.command()
 @click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to read from (default: groom.yml)")
 @click.option("--job", default=None, help="Job name to apply format expression to (default: all jobs)")
-@click.option("--formatter", default="def format(task):\n  if task in failed:\n    return f'logs/output_{task2id[task]}_{task}.txt'", help="Format expression per task (default: '{name}: {range}')")
+@click.option("--formatter", default="def format(task):\n  if task in failed:\n    return f'logs/output_job_{task2id[task]}_{task}.txt'", help="Format expression per task (default: a simple log file path generator)")
 def format(queue_file, job, formatter):
     path = Path(queue_file)
     if not path.exists():
