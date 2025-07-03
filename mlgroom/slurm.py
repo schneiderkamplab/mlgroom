@@ -369,7 +369,7 @@ def append(job_definition, queue_file, chunk_size, max_jobs, log_file, yes):
 @click.option("--job", default=None, help="Job name to show status for (default: all jobs)")
 @click.option("--fields", default="name,range,submitted,completed,failed,job_ids", help="Comma-separated fields to display (default: name,range,submitted,completed,failed,job_ids)")
 @click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to read from (default: groom.yml)")
-def status(queue_file, job, fields, log_file):
+def status(queue_file, job, fields):
     path = Path(queue_file)
     if not path.exists():
         click.echo("[ERROR] Queue file does not exist.")
