@@ -403,3 +403,41 @@ def status(queue_file, job, fields):
             output.append(f"Job IDs: {', '.join(f'{k}: {v}' for k, v in sorted(job_ids.items(), key=lambda item: int(item[0].split('-')[0])))}")
         click.echo("\n".join(output))
         click.echo("-" * 40)
+
+@cli.command()
+@click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to read from (default: groom.yml)")
+@click.option("--job", default=None, help="Job name to apply format expression to (default: all jobs)")
+@click.option("--formatter", default="def format(task):\n  if task in failed:\n    return f'logs/output_{task2id[task]}_{task}.txt'", help="Format expression per task (default: '{name}: {range}')")
+def format(queue_file, job, formatter):
+    path = Path(queue_file)
+    if not path.exists():
+        click.echo("[ERROR] Queue file does not exist.")
+        return
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    jobs = data.get("jobs", [])
+    if not jobs:
+        click.echo("[INFO] No jobs found in queue.")
+        return
+    if job: 
+        jobs = [j for j in jobs if j["name"] == job]
+        if not jobs:
+            click.echo(f"[ERROR] Job '{job}' not found in queue.")
+            return
+    for j in jobs:
+        local_vars = {
+            "name": j["name"],
+            "range": parse_ranges(j.get("range", [])),
+            "submitted": parse_ranges(j.get("submitted", [])),
+            "completed": parse_ranges(j.get("completed", [])),
+            "failed": parse_ranges(j.get("failed", [])),
+            "task2id": {task: v for k, v in j.get("job_ids", {}).items() for task in parse_ranges([k])},
+        }
+        exec(formatter, local_vars)
+        format_func = local_vars.get("format")
+        if not callable(format_func):
+            raise click.BadParameter("Formatter must define a callable 'format' function.")
+        for task in local_vars["range"]:
+            formatted_output = format_func(task)
+            if formatted_output:
+                click.echo(formatted_output)
