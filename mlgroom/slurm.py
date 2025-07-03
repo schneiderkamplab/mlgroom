@@ -364,3 +364,42 @@ def append(job_definition, queue_file, chunk_size, max_jobs, log_file, yes):
     else:
         click.echo("[ABORTED] No changes were made.")
         log_message(log_file, "info", "Append operation aborted, no changes made.")
+
+@cli.command()
+@click.option("--job", default=None, help="Job name to show status for (default: all jobs)")
+@click.option("--fields", default="name,range,submitted,completed,failed,job_ids", help="Comma-separated fields to display (default: name,range,submitted,completed,failed,job_ids)")
+@click.option("--queue-file", default="groom.yml", type=click.Path(), help="Queue file to read from (default: groom.yml)")
+def status(queue_file, job, fields, log_file):
+    path = Path(queue_file)
+    if not path.exists():
+        click.echo("[ERROR] Queue file does not exist.")
+        return
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    jobs = data.get("jobs", [])
+    if not jobs:
+        click.echo("[INFO] No jobs found in queue.")
+        return
+    fields = set(fields.split(","))
+    if job:
+        jobs = [j for j in jobs if j["name"] == job]
+        if not jobs:
+            click.echo(f"[ERROR] Job '{job}' not found in queue.")
+            return
+    for j in jobs:
+        output = []
+        if "name" in fields:
+            output.append(f"Name: {j['name']}")
+        if "range" in fields:
+            output.append(f"Range: {format_ranges(parse_ranges(j.get('range', [])))}")
+        if "submitted" in fields:
+            output.append(f"Submitted: {format_ranges(parse_ranges(j.get('submitted', [])))}")
+        if "completed" in fields:
+            output.append(f"Completed: {format_ranges(parse_ranges(j.get('completed', [])))}")
+        if "failed" in fields:
+            output.append(f"Failed: {format_ranges(parse_ranges(j.get('failed', [])))}")
+        if "job_ids" in fields:
+            job_ids = j.get("job_ids", {})
+            output.append(f"Job IDs: {', '.join([f'{k}: {v}' for k, v in job_ids.items()])}")
+        click.echo("\n".join(output))
+        click.echo("-" * 40)
