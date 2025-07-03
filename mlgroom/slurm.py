@@ -273,7 +273,6 @@ def resubmit(job, queue_file, log_file, yes, max_resubmissions, task_ids):
             chunk_to_id[(s, e)] = jid
         eligible_failed = []
         for task_id in failed:
-            print(task_id, task_ids, task_id not in task_ids)
             if task_ids and task_id not in task_ids:
                 log_message(log_file, "info", f"[SKIPPED] {name}: task {task_id} not in specified task_ids ({task_ids})")
                 continue
@@ -313,7 +312,7 @@ def resubmit(job, queue_file, log_file, yes, max_resubmissions, task_ids):
             for (s, e) in split_into_ranges(clean_tasks)
         ]
         j["resubmit_counts"] = resubmit_counts
-        j["failed"] = []
+        j["failed"] = format_ranges(sorted(set(failed) - set(eligible_failed)))
         modified = True
         click.echo(f"[OK] {name}: cleaned eligible failed tasks, rebuilt job_ids and submitted.")
     if modified:
