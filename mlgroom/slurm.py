@@ -391,15 +391,15 @@ def status(queue_file, job, fields):
         if "name" in fields:
             output.append(f"Name: {j['name']}")
         if "range" in fields:
-            output.append(f"Range: {format_ranges(parse_ranges(j.get('range', [])))}")
+            output.append(f"Range: {','.join(format_ranges(parse_ranges(j.get('range', []))))}")
         if "submitted" in fields:
-            output.append(f"Submitted: {format_ranges(parse_ranges(j.get('submitted', [])))}")
+            output.append(f"Submitted: {','.join(format_ranges(parse_ranges(j.get('submitted', []))))}")
         if "completed" in fields:
-            output.append(f"Completed: {format_ranges(parse_ranges(j.get('completed', [])))}")
+            output.append(f"Completed: {','.join(format_ranges(parse_ranges(j.get('completed', []))))}")
         if "failed" in fields:
-            output.append(f"Failed: {format_ranges(parse_ranges(j.get('failed', [])))}")
+            output.append(f"Failed: {','.join(format_ranges(parse_ranges(j.get('failed', []))))}")
         if "job_ids" in fields:
             job_ids = j.get("job_ids", {})
-            output.append(f"Job IDs: {', '.join([f'{k}: {v}' for k, v in job_ids.items()])}")
+            output.append(f"Job IDs: {', '.join(sorted(f'{k}: {v}' for k, v in job_ids.items()))}")
         click.echo("\n".join(output))
         click.echo("-" * 40)
